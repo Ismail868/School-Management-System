@@ -22,6 +22,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Payments & Payroll - School Management</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- SweetAlert2 CSS -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
+<!-- SweetAlert2 JS -->
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <style>
         :root {
             --bg-main: #f0f4f8; --card-bg: #ffffff; --text-main: #2d3748;
@@ -308,26 +312,45 @@
         <span class="close-modal" onclick="closePaymentModal()">&times;</span>
         <h2 id="modalTitle" style="margin-top: 0; color: var(--text-main); font-size: 20px; border-bottom: 2px solid var(--border-color); padding-bottom: 10px;">Process Transaction</h2>
         
-        <!-- Fomka wuxuu ku xirmi doonaa Action page-ka xogta keydinaya -->
-        <form action="process_payment_action.jsp" method="POST">
-            <input type="hidden" name="user_type" id="modalUserType">
-            <input type="hidden" name="user_id" id="modalUserId">
-            <input type="hidden" name="billing_month" value="<%= currentMonth %>">
+<form action="process_payment_action.jsp" method="POST">
+    <input type="hidden" name="user_type" id="modalUserType">
+    <input type="hidden" name="user_id" id="modalUserId">
+    
+    <!-- IBDELKA 1: Bisha waa laga dhigay mid la bedeli karo si loo xaliyo bilihii hore (Arrears/Missed Payments) -->
+    <div class="form-group">
+        <label data-i18n="lbl_modal_month">Bisha (Month):</label>
+        <input type="month" name="billing_month" id="modalMonth" class="form-control" required>
+    </div>
 
-            <div class="form-group">
-                <label data-i18n="lbl_modal_name">Magaca (Name):</label>
-                <input type="text" id="modalUserName" class="form-control" readonly style="background: var(--bg-main); opacity: 0.8;">
-            </div>
-            
-            <div class="form-group">
-                <label data-i18n="lbl_modal_amount">Lacagta (Amount in $):</label>
-                <input type="number" step="0.01" name="amount" id="modalAmount" class="form-control" required placeholder="Geli lacagta...">
-            </div>
-            
-            <button type="submit" class="btn-submit">
-                <i class="fas fa-check-circle"></i> <span data-i18n="btn_modal_save">Keydi (Save)</span>
-            </button>
-        </form>
+    <div class="form-group">
+        <label data-i18n="lbl_modal_name">Magaca (Name):</label>
+        <input type="text" id="modalUserName" class="form-control" readonly style="background: var(--bg-main); opacity: 0.8;">
+    </div>
+    
+    <!-- IBDELKA 2: Waxaa lagu daray "oninput" si loo joojiyo in la qoro lacag ka badan Haraaga -->
+    <div class="form-group">
+        <label data-i18n="lbl_modal_amount">Lacagta (Amount in $):</label>
+        <input type="number" step="0.01" name="amount" id="modalAmount" class="form-control" required placeholder="Geli lacagta..." oninput="preventOverpayment(this)">
+        <small id="overpayWarning" style="color: var(--danger); display: none; font-size: 12px; margin-top: 5px;"></small>
+    </div>
+
+    <!-- QAYBTA CUSUB EE BONUS IYO DEDUCTION -->
+    <div id="teacherExtras" style="display: none; border-top: 1px dashed var(--border-color); padding-top: 15px; margin-top: 10px;">
+        <div class="form-group">
+            <label style="color: var(--success);">Bonus (Guno $):</label>
+            <input type="number" step="0.01" name="bonus" id="modalBonus" class="form-control" value="0.00" placeholder="0.00">
+        </div>
+        <div class="form-group">
+            <label style="color: var(--danger);">Deduction (Ganaax/Goyn $):</label>
+            <input type="number" step="0.01" name="deductions" id="modalDeductions" class="form-control" value="0.00" placeholder="0.00">
+        </div>
+    </div>
+    <!-- DHAMAADKA QAYBTA CUSUB -->
+    
+    <button type="submit" class="btn-submit">
+        <i class="fas fa-check-circle"></i> <span data-i18n="btn_modal_save">Keydi (Save)</span>
+    </button>
+</form>
     </div>
 </div>
 
@@ -339,7 +362,7 @@
             status_paid: "Paid", status_partial: "Partial", status_pending: "Pending", status_unpaid: "Unpaid",
             lbl_required: "Required", lbl_paid: "Paid", lbl_balance: "Balance", lbl_salary: "Net Salary", lbl_paid_out: "Paid Out",
             btn_pay: "Pay Fee", btn_locked: "Locked", btn_payout: "Pay Salary", btn_locked_payout: "Locked (Paid)",
-            lbl_modal_name: "Name:", lbl_modal_amount: "Amount ($):", btn_modal_save: "Save Transaction"
+            lbl_modal_month: "Billing Month:", lbl_modal_name: "Name:", lbl_modal_amount: "Amount ($):", btn_modal_save: "Save Transaction"
         },
         so: {
             page_title: "Maamulka Lacagaha & Mushaaraadka", current_month: "Bisha Loo Xisaabinayo:", lock_notice: "(Waxay xirmaysaa 28-ka bisha)", 
@@ -347,7 +370,7 @@
             status_paid: "Waa Bixiyay", status_partial: "Qayb ahaan", status_pending: "Ma Bixin", status_unpaid: "Lama Siin",
             lbl_required: "Laga Rabo", lbl_paid: "Bixiyay", lbl_balance: "Haraa", lbl_salary: "Mushaar", lbl_paid_out: "La Siiyay",
             btn_pay: "Bixi Lacagta", btn_locked: "Waa Xiran Yahay", btn_payout: "Sii Mushaarka", btn_locked_payout: "Waa Xiran Yahay",
-            lbl_modal_name: "Magaca:", lbl_modal_amount: "Lacagta la bixinayo ($):", btn_modal_save: "Keydi Xogta"
+            lbl_modal_month: "Bisha (Month):", lbl_modal_name: "Magaca:", lbl_modal_amount: "Lacagta la bixinayo ($):", btn_modal_save: "Keydi Xogta"
         },
         ar: {
             page_title: "إدارة المدفوعات والرواتب", current_month: "شهر الفوترة:", lock_notice: "(ينتقل للشهر التالي يوم 28)", 
@@ -355,7 +378,7 @@
             status_paid: "مدفوع", status_partial: "جزئي", status_pending: "قيد الانتظار", status_unpaid: "غير مدفوع",
             lbl_required: "المطلوب", lbl_paid: "المدفوع", lbl_balance: "المتبقي", lbl_salary: "الراتب", lbl_paid_out: "تم الدفع",
             btn_pay: "دفع الرسوم", btn_locked: "مغلق", btn_payout: "دفع الراتب", btn_locked_payout: "مغلق (مدفوع)",
-            lbl_modal_name: "الاسم:", lbl_modal_amount: "المبلغ ($):", btn_modal_save: "حفظ البيانات"
+            lbl_modal_month: "شهر الفوترة:", lbl_modal_name: "الاسم:", lbl_modal_amount: "المبلغ ($):", btn_modal_save: "حفظ البيانات"
         }
     };
 
@@ -401,6 +424,21 @@
         }
     }
 
+    // FUNCTION CUSUB: Kahortaga in lacag xad-dhaaf ah la qoro
+    function preventOverpayment(inputElement) {
+        let maxAllowed = parseFloat(inputElement.getAttribute("max"));
+        let enteredValue = parseFloat(inputElement.value);
+        let warningMsg = document.getElementById("overpayWarning");
+
+        if (enteredValue > maxAllowed) {
+            inputElement.value = maxAllowed; // Dib ugu celi lacagtii ugu badneyd ee la ogolaa
+            warningMsg.innerText = "Error: You Cannot Exceed the Remaining Balance. ($" + maxAllowed + ")!";
+            warningMsg.style.display = "block";
+        } else {
+            warningMsg.style.display = "none";
+        }
+    }
+
     // Furida Modal-ka Fomka
     function openPaymentModal(type, id, name, balance) {
         document.getElementById('paymentModal').style.display = "flex";
@@ -409,7 +447,25 @@
         document.getElementById('modalUserType').value = type;
         document.getElementById('modalUserId').value = id;
         document.getElementById('modalUserName').value = name;
-        document.getElementById('modalAmount').value = balance > 0 ? balance : "";
+        
+        // IBDELKA: Default month ku celi bisha hadda lagu jiro, laakiin waa la bedeli karaa
+        document.getElementById('modalMonth').value = "<%= currentMonth %>";
+
+        // Xakamee Form-ka Amount-ka si aan looga badin Balance-ka
+        let amountInput = document.getElementById('modalAmount');
+        amountInput.value = balance > 0 ? balance : "";
+        amountInput.setAttribute("max", balance); // Set HTML5 Max Attribute
+        document.getElementById("overpayWarning").style.display = "none";
+        
+        // QAYBTA CUSUB: Muuji ama Qari Bonus/Deduction
+        let teacherExtras = document.getElementById('teacherExtras');
+        if (type === 'teacher') {
+            teacherExtras.style.display = "block"; // Muuji haddii uu macalin yahay
+            document.getElementById('modalBonus').value = "0.00"; 
+            document.getElementById('modalDeductions').value = "0.00"; 
+        } else {
+            teacherExtras.style.display = "none"; // Qari haddii uu arday yahay
+        }
         
         // Bedel cinwaanka Modal-ka
         let title = document.getElementById('modalTitle');
@@ -433,7 +489,39 @@
         if (event.target == modal) {
             modal.style.display = "none";
         }
-    }
+    };
+      document.addEventListener("DOMContentLoaded", function() {
+        // 1. Soo qabo xogta URL-ka saaran
+        const urlParams = new URLSearchParams(window.location.search);
+        const status = urlParams.get('status');
+        const msg = urlParams.get('msg');
+
+        // 2. Hubi haddii uu jiro status
+        if (status) {
+            if (status === 'error') {
+                // Fariinta Qaladka oo qurux badan
+                Swal.fire({
+                    icon: 'error',
+                    title: 'An error occurred!',
+                    text: msg ? msg : 'Fadlan hubi xogta aad gelisay.',
+                    confirmButtonColor: '#d33',
+                    confirmButtonText: 'Xir'
+                });
+            } else if (status === 'success') {
+                // Fariinta Guusha oo qurux badan
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Waa Hagaag!',
+                    text: 'Lacag-bixinta si guul ah ayay u diiwaangashay.',
+                    confirmButtonColor: '#28a745',
+                    confirmButtonText: 'Waayahay'
+                });
+            }
+
+            // 3. Nadiifi URL-ka si aysan u muuqan fariimaha dusha saaran markii la refresh-gareeyo
+            window.history.replaceState(null, null, window.location.pathname);
+        }
+    });
 </script>
 
 </body>
