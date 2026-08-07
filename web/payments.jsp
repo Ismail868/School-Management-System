@@ -338,11 +338,11 @@
     <div id="teacherExtras" style="display: none; border-top: 1px dashed var(--border-color); padding-top: 15px; margin-top: 10px;">
         <div class="form-group">
             <label style="color: var(--success);">Bonus (Guno $):</label>
-            <input type="number" step="0.01" name="bonus" id="modalBonus" class="form-control" value="0.00" placeholder="0.00">
+            <input type="number" step="0.01" name="bonus" id="modalBonus" class="form-control" value="0.00" placeholder="0.00" oninput="updatePaymentAmount()">
         </div>
         <div class="form-group">
             <label style="color: var(--danger);">Deduction (Ganaax/Goyn $):</label>
-            <input type="number" step="0.01" name="deductions" id="modalDeductions" class="form-control" value="0.00" placeholder="0.00">
+            <input type="number" step="0.01" name="deductions" id="modalDeductions" class="form-control" value="0.00" placeholder="0.00" oninput="updatePaymentAmount()">
         </div>
     </div>
     <!-- DHAMAADKA QAYBTA CUSUB -->
@@ -439,6 +439,9 @@
         }
     }
 
+    // Variable cusub oo banaanka yaala si balance-ka asalka ah loogu keydiyo
+    let globalOriginalBalance = 0; 
+
     // Furida Modal-ka Fomka
     function openPaymentModal(type, id, name, balance) {
         document.getElementById('paymentModal').style.display = "flex";
@@ -451,10 +454,13 @@
         // IBDELKA: Default month ku celi bisha hadda lagu jiro, laakiin waa la bedeli karaa
         document.getElementById('modalMonth').value = "<%= currentMonth %>";
 
+        // Keydi haraaga asalka ah
+        globalOriginalBalance = balance > 0 ? balance : 0; 
+
         // Xakamee Form-ka Amount-ka si aan looga badin Balance-ka
         let amountInput = document.getElementById('modalAmount');
-        amountInput.value = balance > 0 ? balance : "";
-        amountInput.setAttribute("max", balance); // Set HTML5 Max Attribute
+        amountInput.value = globalOriginalBalance > 0 ? globalOriginalBalance : "";
+        amountInput.setAttribute("max", globalOriginalBalance); // Set HTML5 Max Attribute
         document.getElementById("overpayWarning").style.display = "none";
         
         // QAYBTA CUSUB: Muuji ama Qari Bonus/Deduction
@@ -476,6 +482,28 @@
         } else {
             title.innerHTML = type === 'student' ? '<i class="fas fa-cash-register"></i> Process Student Fee' : '<i class="fas fa-hand-holding-usd"></i> Process Teacher Salary';
         }
+    }
+
+    // FUNCTION CUSUB: Kaas oo si toos ah u bedelaya lacagta marka Bonus ama Ganaax la qoro
+    function updatePaymentAmount() {
+        let userType = document.getElementById('modalUserType').value;
+        if (userType !== 'teacher') return; // Kaliya macalinka ayey khuseysaa
+
+        let bonus = parseFloat(document.getElementById('modalBonus').value) || 0;
+        let deduction = parseFloat(document.getElementById('modalDeductions').value) || 0;
+        
+        // Xisaabi xaqiisa cusub (New Net Balance)
+        let newMax = globalOriginalBalance + bonus - deduction;
+        if (newMax < 0) newMax = 0; // Lacagtu kama yaraan karto 0
+
+        let amountInput = document.getElementById('modalAmount');
+        amountInput.setAttribute("max", newMax);
+        
+        // Si toos ah ugu qor sanduuqa "Amount" lacagta cusub ee saxda ah
+        amountInput.value = newMax.toFixed(2); 
+        
+        // Hubi in digniinta (Warning) la qariyo
+        preventOverpayment(amountInput); 
     }
 
     // Xirida Modal-ka

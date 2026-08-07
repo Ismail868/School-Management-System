@@ -1,8 +1,9 @@
-<%@page import="java.sql.*, utils.DBConnection"%>
+<%@page import="java.sql.*, utils.DBConnection, java.text.SimpleDateFormat, java.util.Date"%>
 <%@page contentType="text/html" pageEncoding="UTF-8"%>
 <%
     // 1. HUBINTA SESSION-KA
-    if (session.getAttribute("username") == null) {
+    String adminUser = (String) session.getAttribute("username");
+    if (adminUser == null) {
         response.sendRedirect("index.jsp");
         return;
     }
@@ -27,6 +28,11 @@
     double bonus = 0.0;
     double deductions = 0.0;
 
+    // UNIFIED STATUSES
+    final String STATUS_PAID = "Paid";
+    final String STATUS_PARTIAL = "Partial";
+    final String STATUS_UNPAID = "Unpaid";
+
     try {
         userId = Integer.parseInt(userIdStr);
         newAmount = Double.parseDouble(amountStr);
@@ -37,6 +43,18 @@
         if (deductionsStr != null && !deductionsStr.trim().isEmpty()) {
             deductions = Double.parseDouble(deductionsStr);
         }
+        
+        // SECURITY CHECK 1
+        if (newAmount <= 0 && bonus <= 0 && deductions <= 0) {
+            response.sendRedirect("payments.jsp?status=error&msg=" + java.net.URLEncoder.encode("Fadlan geli lacag sax ah, gunno, ama ganaax!", "UTF-8"));
+            return;
+        }
+        
+        if (newAmount < 0 || bonus < 0 || deductions < 0) {
+            response.sendRedirect("payments.jsp?status=error&msg=" + java.net.URLEncoder.encode("Lacagtu ma noqon karto mid taban (Negative)!", "UTF-8"));
+            return;
+        }
+
     } catch (NumberFormatException e) {
         response.sendRedirect("payments.jsp?status=invalid_number");
         return;
@@ -49,82 +67,110 @@
 
     try {
         conn = DBConnection.getConnection();
+        conn.setAutoCommit(false); // TRANSACTION START
 
         // -------------------------------------------------------------
         // A) XALINTA LACAGTA ARDAYDA (STUDENTS)
         // -------------------------------------------------------------
         if ("student".equalsIgnoreCase(userType)) {
             
-            String checkSql = "SELECT id, paid_amount FROM student_payments WHERE student_id = ? AND month_year = ?";
+            String checkSql = "SELECT id, paid_amount, total_amount FROM student_payments WHERE student_id = ? AND month_year = ? FOR UPDATE";
             psCheck = conn.prepareStatement(checkSql);
             psCheck.setInt(1, userId);
             psCheck.setString(2, billingMonth);
             rs = psCheck.executeQuery();
 
             if (rs.next()) {
-                String updateSql = "UPDATE student_payments SET paid_amount = paid_amount + ?, payment_date = NOW() WHERE student_id = ? AND month_year = ?";
+                double currentPaid = rs.getDouble("paid_amount");
+                double totalAmount = rs.getDouble("total_amount");
+                double backendBalance = totalAmount - currentPaid;
+                
+                if (newAmount > backendBalance) {
+                    conn.rollback();
+                    response.sendRedirect("payments.jsp?status=error&msg=" + java.net.URLEncoder.encode("Waa la diiday! Lacagta aad soo dirtay waxay ka badan tahay haraaga ardayga.", "UTF-8"));
+                    return;
+                }
+                
+                double totalPaidNow = currentPaid + newAmount;
+                String newStatus = (totalPaidNow >= totalAmount) ? STATUS_PAID : STATUS_PARTIAL;
+
+                String updateSql = "UPDATE student_payments SET paid_amount = ?, status = ?, payment_date = NOW() WHERE student_id = ? AND month_year = ?";
                 psAction = conn.prepareStatement(updateSql);
-                psAction.setDouble(1, newAmount);
-                psAction.setInt(2, userId);
-                psAction.setString(3, billingMonth);
+                psAction.setDouble(1, totalPaidNow);
+                psAction.setString(2, newStatus);
+                psAction.setInt(3, userId);
+                psAction.setString(4, billingMonth);
                 psAction.executeUpdate();
             } else {
-                String insertSql = "INSERT INTO student_payments (student_id, total_amount, paid_amount, month_year, payment_date) " +
-                                   "SELECT s.id, c.monthly_fee, ?, ?, NOW() " +
-                                   "FROM students s " +
-                                   "JOIN class c ON s.class = c.class_name " +
-                                   "WHERE s.id = ?";
+                double monthlyFee = 0.0;
+                String feeSql = "SELECT c.monthly_fee FROM students s JOIN class c ON s.class = c.class_name WHERE s.id = ?";
+                try (PreparedStatement psFee = conn.prepareStatement(feeSql)) {
+                    psFee.setInt(1, userId);
+                    try (ResultSet rsFee = psFee.executeQuery()) {
+                        if (rsFee.next()) {
+                            monthlyFee = rsFee.getDouble("monthly_fee");
+                        }
+                    }
+                }
+
+                if (newAmount > monthlyFee) {
+                    conn.rollback();
+                    response.sendRedirect("payments.jsp?status=error&msg=" + java.net.URLEncoder.encode("Waa la diiday! Lacagta la bixinayo way ka badan tahay khidmadda billaha ah ee ardayga.", "UTF-8"));
+                    return;
+                }
+
+                String insertSql = "INSERT INTO student_payments (student_id, total_amount, paid_amount, status, month_year, payment_date) " +
+                                   "VALUES (?, ?, ?, CASE WHEN ? >= ? THEN ? ELSE ? END, ?, NOW())";
                 psAction = conn.prepareStatement(insertSql);
-                psAction.setDouble(1, newAmount);
-                psAction.setString(2, billingMonth);
-                psAction.setInt(3, userId);
+                psAction.setInt(1, userId);
+                psAction.setDouble(2, monthlyFee);
+                psAction.setDouble(3, newAmount);
+                psAction.setDouble(4, newAmount);
+                psAction.setDouble(5, monthlyFee);
+                psAction.setString(6, STATUS_PAID);
+                psAction.setString(7, STATUS_PARTIAL);
+                psAction.setString(8, billingMonth);
                 psAction.executeUpdate();
             }
 
         // -------------------------------------------------------------
-        // B) XALINTA MUSHAARKA MACALIMIINTA (TEACHERS) - (LAGU XAKAMEYAY GANAAXA IYO BIXINTA)
+        // B) XALINTA MUSHAARKA MACALIMIINTA (TEACHERS)
         // -------------------------------------------------------------
         } else if ("teacher".equalsIgnoreCase(userType)) {
 
-            // 1. Hubi record-ka bishan taagan inuu jiro
-            String checkSql = "SELECT id, salary_amount, paid_amount, bonus, deductions FROM teacher_payments WHERE teacher_id = ? AND month_year = ?";
+            String checkSql = "SELECT id, salary_amount, paid_amount, bonus, deductions FROM teacher_payments WHERE teacher_id = ? AND month_year = ? FOR UPDATE";
             psCheck = conn.prepareStatement(checkSql);
             psCheck.setInt(1, userId);
             psCheck.setString(2, billingMonth);
             rs = psCheck.executeQuery();
 
             if (rs.next()) {
-                // HADDII RECORD-KU JIRO (UPDATE / BIXIN HARAAGA)
                 double baseSalary = rs.getDouble("salary_amount");
                 double currentPaid = rs.getDouble("paid_amount");
                 double currentBonus = rs.getDouble("bonus");
                 double currentDeductions = rs.getDouble("deductions");
                 
-                // Isku geynta xogta cusub iyo tii hore
                 double totalBonus = currentBonus + bonus;
                 double totalDeductions = currentDeductions + deductions;
                 
                 double updatedNetSalary = baseSalary + totalBonus - totalDeductions;
+                double backendBalance = updatedNetSalary - currentPaid;
                 double totalPaidNow = currentPaid + newAmount;
 
-                // Control Ganaaxa
                 if (totalDeductions > (baseSalary + totalBonus)) {
-                    response.sendRedirect("payments.jsp?status=error&msg=" + 
-                        java.net.URLEncoder.encode("Ganaaxa ayaa ka badan mushaarka macalinka!", "UTF-8"));
+                    conn.rollback();
+                    response.sendRedirect("payments.jsp?status=error&msg=" + java.net.URLEncoder.encode("Ganaaxa ayaa ka badan mushaarka macalinka!", "UTF-8"));
                     return;
                 }
 
-                // Control Bixinta (Inaan laga badin Net Salary)
-                if (totalPaidNow > updatedNetSalary) {
-                    response.sendRedirect("payments.jsp?status=error&msg=" + 
-                        java.net.URLEncoder.encode("Lacagtaan waxay ka badan tahay haraaga macalinka!", "UTF-8"));
+                if (newAmount > backendBalance) {
+                    conn.rollback();
+                    response.sendRedirect("payments.jsp?status=error&msg=" + java.net.URLEncoder.encode("Waa la diiday! Lacagtaan waxay ka badan tahay haraaga rasmiga ah ee macalinka!", "UTF-8"));
                     return;
                 }
 
-                // Xisaabinta Status-ka
-                String newStatus = (totalPaidNow >= updatedNetSalary) ? "Paid" : "Partial";
+                String newStatus = (totalPaidNow >= updatedNetSalary) ? STATUS_PAID : STATUS_PARTIAL;
 
-                // Update garaynta DB-ga
                 String updateSql = "UPDATE teacher_payments SET paid_amount = ?, bonus = ?, deductions = ?, status = ?, payment_date = NOW() WHERE teacher_id = ? AND month_year = ?";
                 psAction = conn.prepareStatement(updateSql);
                 psAction.setDouble(1, totalPaidNow);
@@ -136,11 +182,9 @@
                 psAction.executeUpdate();
 
             } else {
-                // HADDII AY TAHAY MARKII UGU HOREYSAY (INSERT)
                 rs.close();
                 psCheck.close();
 
-                // Soo hel Base Salary-ga macalinka
                 double baseSalary = 0.0;
                 String salarySql = "SELECT base_salary FROM teachers WHERE id = ?";
                 psCheck = conn.prepareStatement(salarySql);
@@ -152,24 +196,20 @@
 
                 double netSalary = baseSalary + bonus - deductions;
 
-                // Control Ganaaxa
                 if (deductions > (baseSalary + bonus)) {
-                    response.sendRedirect("payments.jsp?status=error&msg=" + 
-                        java.net.URLEncoder.encode("Ganaaxa ayaa ka badan mushaarka macalinka!", "UTF-8"));
+                    conn.rollback();
+                    response.sendRedirect("payments.jsp?status=error&msg=" + java.net.URLEncoder.encode("Ganaaxa ayaa ka badan mushaarka macalinka!", "UTF-8"));
                     return;
                 }
 
-                // Control Bixinta
                 if (newAmount > netSalary) {
-                    response.sendRedirect("payments.jsp?status=error&msg=" + 
-                        java.net.URLEncoder.encode("Lacagtaan waxay ka badan tahay haraaga macalinka!", "UTF-8"));
+                    conn.rollback();
+                    response.sendRedirect("payments.jsp?status=error&msg=" + java.net.URLEncoder.encode("Waa la diiday! Lacagtaan waxay ka badan tahay xaqqa/mushaarka macalinka!", "UTF-8"));
                     return;
                 }
 
-                // Xisaabinta Status-ka
-                String newStatus = (newAmount >= netSalary) ? "Paid" : (newAmount > 0 ? "Partial" : "Unpaid");
+                String newStatus = (newAmount >= netSalary) ? STATUS_PAID : (newAmount > 0 ? STATUS_PARTIAL : STATUS_UNPAID);
 
-                // Gelin cusub DB-ga
                 String insertSql = "INSERT INTO teacher_payments (teacher_id, salary_amount, bonus, deductions, paid_amount, status, month_year, payment_date) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
                 psAction = conn.prepareStatement(insertSql);
                 psAction.setInt(1, userId);
@@ -182,15 +222,53 @@
                 psAction.executeUpdate();
             }
         }
+
+        // =============================================================
+        // C) DIIWAANGELINTA TAARIIKHDA RASIIDKA (PAYMENT HISTORY LOG)
+        // =============================================================
+        if (newAmount > 0 || bonus > 0 || deductions > 0) {
+            // Samee Nambarka Rasiidka: Tusaale "PAY-20260807-153045" (Taariikhda + Waqtiga oo ilbiriqsi ah si uusan isku dhac u imaan)
+            String timestamp = new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date());
+            String receiptNo = "PAY-" + timestamp;
+
+            String historySql = "INSERT INTO payment_history (receipt_no, user_type, user_id, amount, billing_month, processed_by) VALUES (?, ?, ?, ?, ?, ?)";
+            try (PreparedStatement psHist = conn.prepareStatement(historySql)) {
+                psHist.setString(1, receiptNo);
+                psHist.setString(2, userType);
+                psHist.setInt(3, userId);
+                psHist.setDouble(4, newAmount); // Waa lacagta hadda tooska loo dhiibay
+                psHist.setString(5, billingMonth);
+                psHist.setString(6, adminUser); // Magaca Admin-ka lacagta qabtay
+                psHist.executeUpdate();
+            }
+        }
+
+        conn.commit(); // COMMIT GUUL AH (Xogta iyo Taariikhda labaduba waa la wada kaydiyay)
         response.sendRedirect("payments.jsp?status=success");
 
     } catch (Exception e) {
+        if (conn != null) {
+            try {
+                conn.rollback();
+            } catch (SQLException ex) {
+                ex.printStackTrace();
+            }
+        }
+        
+        if (e.getMessage() != null && e.getMessage().toLowerCase().contains("duplicate")) {
+            response.sendRedirect("payments.jsp?status=error&msg=" + java.net.URLEncoder.encode("Fadlan sug waxyar oo dib u isku day. Nidaamka ayaa xakameeyay cilad isku-dhac ah.", "UTF-8"));
+        } else {
+            response.sendRedirect("payments.jsp?status=error&msg=" + java.net.URLEncoder.encode("Cilad ayaa dhacday: " + e.getMessage(), "UTF-8"));
+        }
         e.printStackTrace();
-        response.sendRedirect("payments.jsp?status=error&msg=" + java.net.URLEncoder.encode(e.getMessage(), "UTF-8"));
+        
     } finally {
         if (rs != null) try { rs.close(); } catch (SQLException ignored) {}
         if (psCheck != null) try { psCheck.close(); } catch (SQLException ignored) {}
         if (psAction != null) try { psAction.close(); } catch (SQLException ignored) {}
-        if (conn != null) try { conn.close(); } catch (SQLException ignored) {}
+        if (conn != null) try { 
+            conn.setAutoCommit(true); 
+            conn.close(); 
+        } catch (SQLException ignored) {}
     }
 %>
